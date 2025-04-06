@@ -4,17 +4,19 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"log"
 	"net/http"
-	"os"
+	"time"
+
+	db "url-shortener/database"
+	"url-shortener/utils"
 
 	"github.com/joho/godotenv"
 )
 
-var URLStore = make(map[string]string)
-
 var (
-	port = getEnvVar("PORT", "8080")
-	host = getEnvVar("HOST", "localhost")
+	port = utils.GetEnvVar("PORT", "8080")
+	host = utils.GetEnvVar("HOST", "localhost")
 )
 
 func init() {
@@ -22,14 +24,6 @@ func init() {
 	if err != nil {
 		fmt.Println("Warning: .env file not found")
 	}
-}
-
-func getEnvVar(key, defaultValue string) string {
-	value := os.Getenv(key)
-	if value == "" {
-		return defaultValue
-	}
-	return value
 }
 
 func generateShortURL() (string, error) {
@@ -59,7 +53,19 @@ func handleShorten(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	URLStore[shortURL] = originalURL
+	urlDoc := db.URL{
+		ShortURL:    shortURL,
+		OriginalURL: originalURL,
+		CreatedAt:   time.Now(),
+	}
+
+	err = db.SaveURL(urlDoc)
+	if err != nil {
+		log.Printf("Error saving URL: %v", err)
+		http.Error(w, "Error saving URL", http.StatusInternalServerError)
+		return
+	}
+
 	fmt.Fprintf(w, "Shortened URL: http://%s:%s/%s", host, port, shortURL)
 }
 
@@ -70,16 +76,19 @@ func handleRedirect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	originalURL, exists := URLStore[shortURL]
-	if !exists {
+	urlDoc, err := db.GetURL(shortURL)
+	if err != nil {
 		http.Error(w, "Short URL not found", http.StatusNotFound)
 		return
 	}
 
-	http.Redirect(w, r, originalURL, http.StatusMovedPermanently)
+	http.Redirect(w, r, urlDoc.OriginalURL, http.StatusMovedPermanently)
 }
 
 func main() {
+	db.ConnectDB()
+	defer db.CloseDB()
+
 	http.HandleFunc("/create", handleShorten)
 	http.HandleFunc("/", handleRedirect)
 
